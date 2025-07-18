@@ -22,6 +22,12 @@ typedef struct {
     Vector2 end;
 } LineSegment;
 
+typedef struct {
+    LineSegment segments[MAX_SEGMENTS];
+    int segmentCount;
+    Vector2 goal;
+} Level;
+
 enum EditMode {
     EDIT_LINES_ADD,
     EDIT_LINES_REMOVE,
@@ -37,24 +43,22 @@ const char* EditModeToString(enum EditMode mode) {
     }
 }
 
-void save_segments(LineSegment* segments, int count, const char* filename) {
+void save_level(Level* level, const char* filename) {
     FILE* file = fopen(filename, "wb");
     if (!file) return;
 
-    fwrite(&count, sizeof(int), 1, file);  // write count
-    fwrite(segments, sizeof(LineSegment), count, file);
+    fwrite(level, sizeof(Level), 1, file);
     fclose(file);
 }
 
-int load_segments(LineSegment *segments, const char* filename, int* out_count) {
+int load_level(Level* level, const char* filename) {
     FILE* file = fopen(filename, "rb");
     if (!file) {
-        memset(segments, 0, MAX_SEGMENTS * sizeof(LineSegment));
+        memset(level, 0, sizeof(Level));
         return 0;
     }
 
-    fread(out_count, sizeof(int), 1, file);
-    fread(segments, sizeof(LineSegment), *out_count, file);
+    fread(level, sizeof(Level), 1, file);
     fclose(file);
     return 0;
 }
@@ -181,14 +185,14 @@ int main(void)
     camera.target = (Vector2){ playerPos.x + 20.0f, playerPos.y + 20.0f };
     camera.offset = (Vector2){ screenWidth/2.0f, screenHeight/2.0f };
     camera.rotation = 0.0f;
-    camera.zoom = 0.7f;
+    camera.zoom = 0.5f;
     Vector2 leftWing = {-WING_WIDTH, 0};
     Vector2 rightWing = {WING_WIDTH, 0};
 
     Vector2 clickCircle = {0};
 
-    LineSegment segments[MAX_SEGMENTS] = {0};
-    int segmentCount = 0;
+    Level currentLevelData = {0};
+    int currentLevel = 0;
 
     //editmode
     bool editMode = false;
@@ -197,7 +201,7 @@ int main(void)
     Vector2 editModeStartPosition = {0};
     enum EditMode editModeCurrent = EDIT_LINES_ADD;
 
-    
+    bool graphEnabled = false;
     // Graph data for visualization
     float flapVelocityHistory[GRAPH_SAMPLES] = {0};
     float flapAmountHistory[GRAPH_SAMPLES] = {0};
@@ -205,14 +209,16 @@ int main(void)
     int graphIndex = 0;
     float graphUpdateTimer = 0.0f;
     
-    int currentLevel = 0;
-    load_segments(segments, TextFormat("segments%d", currentLevel), &segmentCount);
+    load_level(&currentLevelData, TextFormat("level%d", currentLevel));
 
     SetTargetFPS(60);
 
     while (!WindowShouldClose()) {
 
         float delta =  GetFrameTime();
+
+        Vector2 mousePos = GetScreenToWorld2D(GetMousePosition(), camera);
+
 
         // Update graph data
         graphUpdateTimer += delta;
@@ -230,6 +236,24 @@ int main(void)
                 editPos = playerPos;
             }
         }
+
+        if(IsKeyPressed(KEY_G)) {
+            graphEnabled = !graphEnabled;
+        }
+
+        if(IsKeyPressed(KEY_SPACE)) {
+            playerRot = 0.0;
+            playerPos = (Vector2){100, 100};
+            playerVelocity = (Vector2){0,0};
+        }
+
+        /*
+        █████████████████████████████████████████████████████████████████████████
+        ██                                                                            ██
+        ██                             UPDATE SECTION                                 ██
+        ██                                                                            ██
+        █████████████████████████████████████████████████████████████████████████
+        */
 
         if(!editMode){
             // ----------------------PLAYMODE-----------------------
@@ -293,9 +317,9 @@ int main(void)
 
             // Rectangle rect = {0,0,300,200};
 
-            for(int i = 0; i < segmentCount; i++) {
+            for(int i = 0; i < currentLevelData.segmentCount; i++) {
                 if(CollisionWithLine(playerPos, leftWing, rightWing, 
-                    segments[i].start, segments[i].end)){
+                    currentLevelData.segments[i].start, currentLevelData.segments[i].end)){
                     playerRot = 0.0;
                     playerPos = (Vector2){100, 50};
                     playerVelocity = (Vector2){0,0}; 
@@ -310,9 +334,22 @@ int main(void)
                 }
             }
 
+            // Check goal collision
+            if(currentLevelData.goal.x != 0 || currentLevelData.goal.y != 0) {
+                if(Vector2Distance(playerPos, currentLevelData.goal) < 40) {
+                    // Goal reached! Load next level
+                    currentLevel++;
+                    load_level(&currentLevelData, TextFormat("level%d", currentLevel));
+                    playerRot = 0.0;
+                    playerPos = (Vector2){100, 100};
+                    playerVelocity = (Vector2){0,0};
+                }
+            }
+
             //-------------------------------------------------
         } else {
             //-----------------editMode------------------------
+            
             int editSpeed = 400;
             if(IsKeyDown(KEY_LEFT)) editPos.x -= editSpeed * delta;
             if(IsKeyDown(KEY_RIGHT)) editPos.x += editSpeed * delta;
@@ -320,7 +357,7 @@ int main(void)
             if(IsKeyDown(KEY_DOWN)) editPos.y += editSpeed * delta;
 
             if(IsKeyPressed(KEY_S)) {
-                save_segments(segments, segmentCount, TextFormat("segments%d", currentLevel));
+                save_level(&currentLevelData, TextFormat("level%d", currentLevel));
             }
             if(IsKeyPressed(KEY_D)){
                 editModeCurrent = (editModeCurrent + 1) % 3;
@@ -328,11 +365,11 @@ int main(void)
 
             if(IsKeyPressed(KEY_N)) {
                 currentLevel++;
-                load_segments(segments, TextFormat("segments%d", currentLevel), &segmentCount);
+                load_level(&currentLevelData, TextFormat("level%d", currentLevel));
             }
             if(IsKeyPressed(KEY_B)) {
                 currentLevel--;
-                load_segments(segments, TextFormat("segments%d", currentLevel), &segmentCount);
+                load_level(&currentLevelData, TextFormat("level%d", currentLevel));
             }
             switch(editModeCurrent) {
                 case EDIT_LINES_ADD:
@@ -343,33 +380,35 @@ int main(void)
                         {
                             editModeStartPosition = pressedPos;
                         } else {
-                            segments[segmentCount++] = (LineSegment){editModeStartPosition, pressedPos};
+                            currentLevelData.segments[currentLevelData.segmentCount++] = (LineSegment){editModeStartPosition, pressedPos};
                         }
                         editModeStartOfCurrentSegment = !editModeStartOfCurrentSegment;
                     }
                 break;
                 case EDIT_LINES_REMOVE:
                     if(IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                        Vector2 mousePos =  GetScreenToWorld2D(GetMousePosition(), camera);
                         int segmentClicked = -1;
-                        for(int i = 0; i < segmentCount; i++) {
+                        for(int i = 0; i < currentLevelData.segmentCount; i++) {
                             if(CollisionWithLine(mousePos, 
                                 (Vector2){mousePos.x + 5, mousePos.y + 5}, 
                                 (Vector2){mousePos.x - 5, mousePos.y - 5}, 
-                                segments[i].start, segments[i].end)){
+                                currentLevelData.segments[i].start, currentLevelData.segments[i].end)){
                                  segmentClicked = i;
                                  break;
                             }
                         }
                         if(segmentClicked != -1) {
-                            if(segmentCount == 1) break;
-                            segments[segmentClicked] = segments[segmentCount-1];
-                            segmentCount--;
-                            save_segments(segments, segmentCount, TextFormat("segments%d", currentLevel));
+                            if(currentLevelData.segmentCount == 1) break;
+                            currentLevelData.segments[segmentClicked] = currentLevelData.segments[currentLevelData.segmentCount-1];
+                            currentLevelData.segmentCount--;
+                            save_level(&currentLevelData, TextFormat("level%d", currentLevel));
                         }
                     }
                 break;
                 case EDIT_GOAL_PLACE:
+                    if(IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                        currentLevelData.goal = mousePos;
+                    }
                 break;
                 default: break;
             }
@@ -384,6 +423,14 @@ int main(void)
 
         BeginDrawing();
 
+            /*
+            █████████████████████████████████████████████████████████████████████████
+            ██                                                                            ██
+            ██                              DRAW SECTION                                  ██
+            ██                                                                            ██
+            █████████████████████████████████████████████████████████████████████████
+            */
+
             ClearBackground(DARKGRAY);
 
             BeginMode2D(camera);
@@ -396,8 +443,14 @@ int main(void)
 
                 DrawCircleV(clickCircle, 20, RED);
 
-                for(int i = 0; i < segmentCount; i++) {
-                    DrawLineEx(segments[i].start, segments[i].end, SEGMENT_THICKNESS, RAYWHITE);
+                for(int i = 0; i < currentLevelData.segmentCount; i++) {
+                    DrawLineEx(currentLevelData.segments[i].start, currentLevelData.segments[i].end, SEGMENT_THICKNESS, RAYWHITE);
+                }
+
+                // Draw goal
+                if(currentLevelData.goal.x != 0 || currentLevelData.goal.y != 0) {
+                    DrawCircleV(currentLevelData.goal, 30, GREEN);
+                    DrawCircleV(currentLevelData.goal, 25, DARKGREEN);
                 }
 
                 if(editMode) {
@@ -406,17 +459,19 @@ int main(void)
                     case EDIT_LINES_ADD:
                     break;
                     case EDIT_LINES_REMOVE:
-                        Vector2 mousePos = GetScreenToWorld2D(GetMousePosition(), camera);
-                        for(int i = 0; i < segmentCount; i++) {
+                        for(int i = 0; i < currentLevelData.segmentCount; i++) {
                             if(CollisionWithLine(mousePos, (Vector2){mousePos.x + 5, mousePos.y + 5}, (Vector2){mousePos.x - 5, mousePos.y - 5}, 
-                                segments[i].start, segments[i].end)){
-                                    DrawLineEx(segments[i].start, segments[i].end, SEGMENT_THICKNESS, YELLOW);
-                                    DrawCircleV(segments[i].start, 20, YELLOW);
-                                    DrawCircleV(segments[i].end, 20, YELLOW);
+                                currentLevelData.segments[i].start, currentLevelData.segments[i].end)){
+                                    DrawLineEx(currentLevelData.segments[i].start, currentLevelData.segments[i].end, SEGMENT_THICKNESS, YELLOW);
+                                    DrawCircleV(currentLevelData.segments[i].start, 20, YELLOW);
+                                    DrawCircleV(currentLevelData.segments[i].end, 20, YELLOW);
                             }
                         }
                     break;
                     case EDIT_GOAL_PLACE:
+                        // Show goal preview at mouse position
+                        DrawCircleV(mousePos, 30, (Color){0, 255, 0, 100});
+                        DrawCircleV(mousePos, 25, (Color){0, 150, 0, 100});
                     break;
                     default: break;
                 }
@@ -433,19 +488,21 @@ int main(void)
             DrawText(TextFormat("Edit Mode: %s", EditModeToString(editModeCurrent)), 10, 135, 20, WHITE);
             // DrawText(EditModeToString(editModeCurrent), 10, screenHeight - 30, 20, (editMode ? YELLOW : GREEN));
             
-            // Draw graphs
-            float graphX = screenWidth - GRAPH_WIDTH - 10;
-            float graphY = 10;
-            
-            DrawGraph(flapVelocityHistory, GRAPH_SAMPLES, graphIndex, graphX, graphY, GRAPH_WIDTH, GRAPH_HEIGHT, RED, "Flap Velocity");
-            DrawGraph(flapAmountHistory, GRAPH_SAMPLES, graphIndex, graphX, graphY + GRAPH_HEIGHT + 5, GRAPH_WIDTH, GRAPH_HEIGHT, BLUE, "Flap Amount");
-            DrawGraph(playerVelocityMagnitudeHistory, GRAPH_SAMPLES, graphIndex, graphX, graphY + 2 * (GRAPH_HEIGHT + 5), GRAPH_WIDTH, GRAPH_HEIGHT, GREEN, "Player Speed");
-            
-            if(editMode) {
-                DrawText("EDIT MODE - Press P to toggle", 10, screenHeight - 30, 20, YELLOW);
-                DrawText("S to save segments", 10, screenHeight - 55, 20, YELLOW);
-            } else {
-                DrawText("PLAY MODE - Press P to toggle", 10, screenHeight - 30, 20, GREEN);
+            if(graphEnabled) {
+                // Draw graphs
+                float graphX = screenWidth - GRAPH_WIDTH - 10;
+                float graphY = 10;
+                
+                DrawGraph(flapVelocityHistory, GRAPH_SAMPLES, graphIndex, graphX, graphY, GRAPH_WIDTH, GRAPH_HEIGHT, RED, "Flap Velocity");
+                DrawGraph(flapAmountHistory, GRAPH_SAMPLES, graphIndex, graphX, graphY + GRAPH_HEIGHT + 5, GRAPH_WIDTH, GRAPH_HEIGHT, BLUE, "Flap Amount");
+                DrawGraph(playerVelocityMagnitudeHistory, GRAPH_SAMPLES, graphIndex, graphX, graphY + 2 * (GRAPH_HEIGHT + 5), GRAPH_WIDTH, GRAPH_HEIGHT, GREEN, "Player Speed");
+                
+                if(editMode) {
+                    DrawText("EDIT MODE - Press P to toggle", 10, screenHeight - 30, 20, YELLOW);
+                    DrawText("S to save segments", 10, screenHeight - 55, 20, YELLOW);
+                } else {
+                    DrawText("PLAY MODE - Press P to toggle", 10, screenHeight - 30, 20, GREEN);
+                }
             }
 
         EndDrawing();
