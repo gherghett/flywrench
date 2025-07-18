@@ -379,7 +379,7 @@ void ScreenGameplay_Update(void) {
 void ScreenGameplay_Draw(void) {
     BeginDrawing();
     
-    ClearBackground(DARKGRAY);
+    ClearBackground((Color){20,20,20,255});
     
     BeginMode2D(camera);
     
